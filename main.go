@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -17,16 +19,18 @@ import (
 )
 
 type options struct {
-	device   string
-	baud     int
-	address  int
-	parity   string
-	discover bool
-	interval time.Duration
-	timeout  time.Duration
-	json     bool
-	text     bool
-	debug    bool
+	device         string
+	baud           int
+	address        int
+	parity         string
+	discover       bool
+	interval       time.Duration
+	timeout        time.Duration
+	json           bool
+	text           bool
+	debug          bool
+	metricsAddress string
+	metricsName    string
 }
 
 func main() {
@@ -53,22 +57,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if initialBaud == 0 {
 		initialBaud = 9600
 	}
-	port, err := serial.Open(opts.device, &serial.Mode{
-		BaudRate: initialBaud,
-		DataBits: 8,
-		Parity:   parity,
-		StopBits: serial.OneStopBit,
-	})
+	port, err := openSerialPort(opts.device, initialBaud, parity)
 	if err != nil {
 		return serialOpenError(opts.device, err)
 	}
-	defer port.Close()
 
 	var sensorPort serialPort = port
 	if opts.debug {
 		sensorPort = newWireDebugPort(port, stderr)
 	}
 	s := newSensor(sensorPort, opts.timeout)
+	defer func() { _ = s.port.Close() }()
 	knownConfig := opts.baud != 0
 	if knownConfig {
 		config := configuration{baud: opts.baud, address: byte(opts.address), parity: parity}
@@ -96,25 +95,118 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	averages := newRollingAverages()
+	if opts.metricsAddress != "" {
+		metricName, err := normalizeMetricName(opts.metricsName)
+		if err != nil {
+			return err
+		}
+		listener, err := net.Listen("tcp", opts.metricsAddress)
+		if err != nil {
+			return fmt.Errorf("listen for metrics on %s: %w", opts.metricsAddress, err)
+		}
+		server := &http.Server{
+			Handler:           metricsHandler{averages: averages, name: metricName},
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+		defer server.Close()
+		go func() {
+			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				fmt.Fprintf(stderr, "metrics server: %v\n", err)
+			}
+		}()
+		fmt.Fprintf(stderr, "serving %s metrics at http://%s/metrics\n", metricName, listener.Addr())
+	}
+	var lastReading measurement
 	for {
 		reading, err := s.readMeasurement()
 		if err != nil {
-			return fmt.Errorf("read sensor: %w", err)
+			if errors.Is(err, errResponseTimeout) {
+				reading = unavailableMeasurement(s.config, lastReading)
+				averages.setLast(reading.Value)
+				if err := printMeasurement(stdout, reading, opts.json, opts.text); err != nil {
+					return err
+				}
+				fmt.Fprintf(stderr, "read sensor: %v; output NaN and reconnecting\n", err)
+			} else {
+				fmt.Fprintf(stderr, "read sensor: %v; reconnecting\n", err)
+			}
+			_ = s.port.Close()
+			if !waitForNextRead(ctx, opts.interval) {
+				return nil
+			}
+			s, err = reconnectSensor(ctx, opts, s.config, stderr)
+			if err != nil {
+				return err
+			}
+			if s == nil {
+				return nil
+			}
+			continue
 		}
+		lastReading = reading
+		averages.add(reading.Timestamp, reading.Value, reading.Latency)
 		if err := printMeasurement(stdout, reading, opts.json, opts.text); err != nil {
 			return err
 		}
 		if opts.interval == 0 {
 			return nil
 		}
-
-		timer := time.NewTimer(opts.interval)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !waitForNextRead(ctx, opts.interval) {
 			return nil
-		case <-timer.C:
 		}
+	}
+}
+
+var openSerialPort = func(device string, baud int, parity serial.Parity) (configurableSerialPort, error) {
+	return serial.Open(device, &serial.Mode{
+		BaudRate: baud,
+		DataBits: 8,
+		Parity:   parity,
+		StopBits: serial.OneStopBit,
+	})
+}
+
+func reconnectSensor(ctx context.Context, opts options, config configuration, stderr io.Writer) (*sensor, error) {
+	retryDelay := opts.interval
+	if retryDelay <= 0 || retryDelay > time.Second {
+		retryDelay = time.Second
+	}
+	for {
+		port, err := openSerialPort(opts.device, config.baud, config.parity)
+		if err == nil {
+			var sensorPort serialPort = port
+			if opts.debug {
+				sensorPort = newWireDebugPort(port, stderr)
+			}
+			s := newSensor(sensorPort, opts.timeout)
+			if err = s.setConfiguration(config); err == nil {
+				fmt.Fprintf(stderr, "reconnected to %s\n", opts.device)
+				return s, nil
+			}
+			_ = port.Close()
+			err = fmt.Errorf("configure sensor connection: %w", err)
+		} else {
+			err = serialOpenError(opts.device, err)
+		}
+		fmt.Fprintf(stderr, "reconnect failed: %v; retrying in %s\n", err, retryDelay)
+		if !waitForNextRead(ctx, retryDelay) {
+			return nil, nil
+		}
+	}
+}
+
+func waitForNextRead(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return ctx.Err() == nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 
@@ -132,6 +224,8 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	fs.BoolVar(&opts.json, "json", false, "emit JSON readings")
 	fs.BoolVar(&opts.text, "text", false, "emit only timestamp and numeric value")
 	fs.BoolVar(&opts.debug, "debug", false, "log raw serial TX/RX bytes to stderr")
+	fs.StringVar(&opts.metricsAddress, "metrics-address", "", "HTTP address for /metrics (disabled when empty)")
+	fs.StringVar(&opts.metricsName, "metrics-name", "qdy30a_b_value", "Prometheus metric name prefix")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -205,7 +299,11 @@ func printMeasurement(w io.Writer, reading measurement, asJSON, asText bool) err
 		return encoder.Encode(reading)
 	}
 	if asText {
-		_, err := fmt.Fprintf(w, "%s %g\n", formatTimestamp(reading.Timestamp), reading.Value)
+		if !reading.LatencyValid {
+			_, err := fmt.Fprintf(w, "%s %g NaN\n", formatTimestamp(reading.Timestamp), reading.Value)
+			return err
+		}
+		_, err := fmt.Fprintf(w, "%s %g %g\n", formatTimestamp(reading.Timestamp), reading.Value, reading.Latency.Seconds())
 		return err
 	}
 	_, err := fmt.Fprintf(w, "%s value=%g %s raw=%d decimals=%d baud=%d address=%d zero=%d full_scale=%d\n",

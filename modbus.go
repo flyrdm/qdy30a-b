@@ -24,6 +24,7 @@ type modbusClient struct {
 type holdingResponse struct {
 	address   byte
 	registers []uint16
+	latency   time.Duration
 }
 
 func (c *modbusClient) readHolding(address byte, start, count uint16) (holdingResponse, error) {
@@ -38,6 +39,7 @@ func (c *modbusClient) readHolding(address byte, start, count uint16) (holdingRe
 	if err := c.port.SetReadTimeout(c.timeout); err != nil {
 		return holdingResponse{}, fmt.Errorf("set serial timeout: %w", err)
 	}
+	started := time.Now()
 	if err := writeAll(c.port, request); err != nil {
 		return holdingResponse{}, fmt.Errorf("write Modbus request: %w", err)
 	}
@@ -46,6 +48,7 @@ func (c *modbusClient) readHolding(address byte, start, count uint16) (holdingRe
 	if err != nil {
 		return holdingResponse{}, err
 	}
+	latency := time.Since(started)
 	if err := validateCRC(frame); err != nil {
 		return holdingResponse{}, err
 	}
@@ -66,7 +69,7 @@ func (c *modbusClient) readHolding(address byte, start, count uint16) (holdingRe
 	for i := range registers {
 		registers[i] = binary.BigEndian.Uint16(frame[3+i*2 : 5+i*2])
 	}
-	return holdingResponse{address: frame[0], registers: registers}, nil
+	return holdingResponse{address: frame[0], registers: registers, latency: latency}, nil
 }
 
 func makeReadRequest(address byte, start, count uint16) []byte {

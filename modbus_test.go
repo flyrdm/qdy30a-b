@@ -11,12 +11,13 @@ import (
 )
 
 type fakePort struct {
-	mode      serialMode
-	writes    [][]byte
-	response  []byte
-	chunks    []int
-	readError error
-	onWrite   func(*fakePort, []byte)
+	mode       serialMode
+	writes     [][]byte
+	response   []byte
+	chunks     []int
+	readError  error
+	onWrite    func(*fakePort, []byte)
+	closeCount int
 }
 
 type serialMode struct {
@@ -58,7 +59,10 @@ func (p *fakePort) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
-func (p *fakePort) Close() error                       { return nil }
+func (p *fakePort) Close() error {
+	p.closeCount++
+	return nil
+}
 func (p *fakePort) ResetInputBuffer() error            { return nil }
 func (p *fakePort) SetReadTimeout(time.Duration) error { return nil }
 
@@ -82,6 +86,9 @@ func TestReadHoldingFragmentedResponse(t *testing.T) {
 	}
 	if got.address != 1 || len(got.registers) != 2 || got.registers[0] != 0x1234 || got.registers[1] != 0xfffe {
 		t.Fatalf("unexpected response: %#v", got)
+	}
+	if got.latency <= 0 {
+		t.Fatalf("latency = %s, want a positive duration", got.latency)
 	}
 }
 

@@ -40,13 +40,17 @@ Force discovery, emit JSON, or poll continuously:
 ./qdy30a-b -interval 1s
 ```
 
-Text mode prints only the local timestamp and scaled numeric value, separated
-by a space. It omits the timezone and always prints exactly six fractional
-digits for microsecond precision and aligned output:
+Text mode prints the local timestamp, scaled numeric value, and response latency
+in seconds, separated by spaces. It omits the timezone and always prints exactly
+six fractional digits for microsecond timestamp precision and aligned output:
 
 ```text
-2026-07-10 13:00:00.123456 12.3
+2026-07-10 13:00:00.123456 12.3 0.025
 ```
+
+JSON output includes the same duration as `latency_seconds`. On a timeout, text
+reports both the value and latency as `NaN`; JSON reports both as `null`, because
+no measurement or response was received.
 
 Log the exact serial bytes sent to and received from the adapter. Wire logs go
 to stderr, leaving readings or JSON on stdout:
@@ -71,6 +75,34 @@ Bypass discovery when the parameters are known:
 
 Use `-device` for a different serial port and `-timeout` to adjust the response
 timeout. Run `./qdy30a-b -h` for all options.
+
+If a measurement times out, the command outputs `NaN` for that reading, closes
+and reopens the serial connection, and keeps retrying. Runtime serial I/O errors
+also trigger reconnection instead of terminating the polling loop.
+
+Expose Prometheus-compatible rolling averages while polling:
+
+```sh
+./qdy30a-b -interval 1s -metrics-address 127.0.0.1:9090 \
+  -metrics-name rain-water-tank-level
+curl http://127.0.0.1:9090/metrics
+```
+
+Prometheus names cannot contain hyphens, so the example name is exported as
+`rain_water_tank_level_average` and `rain_water_tank_level_last`. The average
+gauge has a `window_seconds` label with values
+`5`, `10`, `20`, `30`, `60`, and `300`. Each value is the arithmetic mean of
+successful readings in that rolling window. Values are levels in centimeters.
+Timed-out `NaN` readings
+are excluded. The `_last` gauge reports the most recently emitted
+value, including `NaN` after a timeout. Metrics without a reading are reported as
+`NaN`. The default metric name prefix is `qdy30a_b_value`. The HTTP server is
+disabled unless `-metrics-address` is set.
+
+The `<name>_latency_seconds` gauge reports the most recent successful Modbus
+response latency in seconds. It is measured from immediately before the read
+command is written until the complete response frame has arrived. Before the
+first successful response it is `NaN`.
 
 The documented register layout is:
 

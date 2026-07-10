@@ -49,26 +49,41 @@ type sensor struct {
 }
 
 type measurement struct {
-	Timestamp time.Time `json:"timestamp"`
-	Value     float64   `json:"value"`
-	Unit      string    `json:"unit"`
-	UnitCode  uint16    `json:"unit_code"`
-	Raw       int16     `json:"raw"`
-	Decimals  uint16    `json:"decimals"`
-	Baud      int       `json:"baud"`
-	Address   byte      `json:"address"`
-	Zero      int16     `json:"zero"`
-	FullScale int16     `json:"full_scale"`
+	Timestamp    time.Time     `json:"timestamp"`
+	Value        float64       `json:"value"`
+	Unit         string        `json:"unit"`
+	UnitCode     uint16        `json:"unit_code"`
+	Raw          int16         `json:"raw"`
+	Decimals     uint16        `json:"decimals"`
+	Baud         int           `json:"baud"`
+	Address      byte          `json:"address"`
+	Zero         int16         `json:"zero"`
+	FullScale    int16         `json:"full_scale"`
+	Latency      time.Duration `json:"-"`
+	LatencyValid bool          `json:"-"`
 }
 
 func (m measurement) MarshalJSON() ([]byte, error) {
 	type alias measurement
+	var value *float64
+	if !math.IsNaN(m.Value) {
+		value = &m.Value
+	}
+	var latencySeconds *float64
+	if m.LatencyValid {
+		seconds := m.Latency.Seconds()
+		latencySeconds = &seconds
+	}
 	return json.Marshal(struct {
-		Timestamp string `json:"timestamp"`
+		Timestamp      string   `json:"timestamp"`
+		Value          *float64 `json:"value"`
+		LatencySeconds *float64 `json:"latency_seconds"`
 		alias
 	}{
-		Timestamp: formatTimestamp(m.Timestamp),
-		alias:     alias(m),
+		Timestamp:      formatTimestamp(m.Timestamp),
+		Value:          value,
+		LatencySeconds: latencySeconds,
+		alias:          alias(m),
 	})
 }
 
@@ -162,17 +177,30 @@ func (s *sensor) readMeasurement() (measurement, error) {
 		unit = fmt.Sprintf("unknown(%d)", registers[2])
 	}
 	return measurement{
-		Timestamp: time.Now(),
-		Value:     float64(raw) / math.Pow10(int(decimals)),
-		Unit:      unit,
-		UnitCode:  registers[2],
-		Raw:       raw,
-		Decimals:  decimals,
-		Baud:      s.config.baud,
-		Address:   actualAddress,
-		Zero:      int16(registers[5]),
-		FullScale: int16(registers[6]),
+		Timestamp:    time.Now(),
+		Value:        float64(raw) / math.Pow10(int(decimals)),
+		Unit:         unit,
+		UnitCode:     registers[2],
+		Raw:          raw,
+		Decimals:     decimals,
+		Baud:         s.config.baud,
+		Address:      actualAddress,
+		Zero:         int16(registers[5]),
+		FullScale:    int16(registers[6]),
+		Latency:      response.latency,
+		LatencyValid: true,
 	}, nil
+}
+
+func unavailableMeasurement(config configuration, previous measurement) measurement {
+	previous.Timestamp = time.Now()
+	previous.Value = math.NaN()
+	previous.Raw = -1
+	previous.Latency = 0
+	previous.LatencyValid = false
+	previous.Baud = config.baud
+	previous.Address = config.address
+	return previous
 }
 
 func parityName(parity serial.Parity) string {
