@@ -86,3 +86,8 @@ The documented register layout is:
 
 Unknown unit codes are preserved and printed as `unknown(code)` instead of
 being guessed.
+
+## License
+
+This project is licensed under the GNU General Public License, version 3. See
+the [LICENSE](LICENSE) file for the complete license text.
