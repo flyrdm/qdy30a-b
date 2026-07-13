@@ -80,17 +80,19 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(stderr, "discovered QDY30A-B: device=%s baud=%d format=8%s1 address=%d\n", opts.device, config.baud, parityName(config.parity), config.address)
+		printDetectedConfiguration(stderr, opts.device, config)
 	} else {
 		factory := configuration{baud: 9600, address: 1, parity: serial.NoParity}
+		config := factory
 		if err := s.probe(factory); err != nil {
 			fmt.Fprintf(stderr, "factory parameters did not respond; starting read-only discovery...\n")
-			config, discoveryErr := s.discover()
+			discovered, discoveryErr := s.discover()
 			if discoveryErr != nil {
 				return fmt.Errorf("factory probe failed (%v); discovery failed: %w", err, discoveryErr)
 			}
-			fmt.Fprintf(stderr, "discovered QDY30A-B: device=%s baud=%d format=8%s1 address=%d\n", opts.device, config.baud, parityName(config.parity), config.address)
+			config = discovered
 		}
+		printDetectedConfiguration(stderr, opts.device, config)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -156,6 +158,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return nil
 		}
 	}
+}
+
+func printDetectedConfiguration(output io.Writer, device string, config configuration) {
+	parity := parityName(config.parity)
+	fmt.Fprintf(output, "detected QDY30A-B: device=%s baud=%d format=8%s1 address=%d\n", device, config.baud, parity, config.address)
+	fmt.Fprintf(output, "launch with: ./qdy30a-b -device %s -baud %d -address %d -parity %s\n", device, config.baud, config.address, parity)
 }
 
 var openSerialPort = func(device string, baud int, parity serial.Parity) (configurableSerialPort, error) {
