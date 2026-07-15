@@ -94,16 +94,20 @@ gauge has a `window_seconds` label with values
 `5`, `10`, `20`, `30`, `60`, and `300`. Each value is the arithmetic mean of
 successful readings in that rolling window. Values are levels in centimeters.
 Timed-out `NaN` readings
-are excluded. When the sensor is unreachable, the `_last`, latency, and rolling
-average gauges retain their last successful values. Metrics without any
-successful reading are reported as `NaN`. The default metric name prefix is
-`qdy30a_b_value`. The HTTP server is
-disabled unless `-metrics-address` is set.
+are excluded. When the sensor is unreachable, the `_last` and rolling average
+gauges retain their last successful values, while the latency gauge always
+reports `NaN`. Metrics without any successful reading are reported as `NaN`.
+The default metric name prefix is `qdy30a_b_value`. To report Prometheus `NaN`
+for all sensor-derived gauges while the sensor is unreachable, use
+`-metrics-retain-last=false`. Retaining the last successful values is the
+default. The HTTP server is disabled unless
+`-metrics-address` is set. Each successful scrape logs the client's direct IP
+address and HTTP user agent to stderr with a timestamp.
 
-The `<name>_latency_seconds` gauge reports the most recent successful Modbus
-response latency in seconds. It is measured from immediately before the read
-command is written until the complete response frame has arrived. Before the
-first successful response it is `NaN`.
+The `<name>_latency_seconds` gauge reports the latest Modbus response latency in
+seconds. It is measured from immediately before the read command is written
+until the complete response frame has arrived. It reports `NaN` before the first
+successful response and whenever the latest sensor reading fails.
 
 The documented register layout is:
 

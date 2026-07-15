@@ -19,18 +19,19 @@ import (
 )
 
 type options struct {
-	device         string
-	baud           int
-	address        int
-	parity         string
-	discover       bool
-	interval       time.Duration
-	timeout        time.Duration
-	json           bool
-	text           bool
-	debug          bool
-	metricsAddress string
-	metricsName    string
+	device            string
+	baud              int
+	address           int
+	parity            string
+	discover          bool
+	interval          time.Duration
+	timeout           time.Duration
+	json              bool
+	text              bool
+	debug             bool
+	metricsAddress    string
+	metricsName       string
+	metricsRetainLast bool
 }
 
 func main() {
@@ -108,7 +109,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("listen for metrics on %s: %w", opts.metricsAddress, err)
 		}
 		server := &http.Server{
-			Handler:           metricsHandler{averages: averages, name: metricName},
+			Handler: metricsHandler{
+				averages:   averages,
+				name:       metricName,
+				retainLast: opts.metricsRetainLast,
+				log:        stderr,
+			},
 			ReadHeaderTimeout: 5 * time.Second,
 		}
 		defer server.Close()
@@ -235,6 +241,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	fs.BoolVar(&opts.debug, "debug", false, "log raw serial TX/RX bytes to stderr")
 	fs.StringVar(&opts.metricsAddress, "metrics-address", "", "HTTP address for /metrics (disabled when empty)")
 	fs.StringVar(&opts.metricsName, "metrics-name", "qdy30a_b_value", "Prometheus metric name prefix")
+	fs.BoolVar(&opts.metricsRetainLast, "metrics-retain-last", true, "retain the last successful metric values while the sensor is unavailable")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}

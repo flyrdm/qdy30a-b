@@ -64,7 +64,7 @@ func TestMetricsHandler(t *testing.T) {
 	}
 
 	var empty bytes.Buffer
-	renderMetrics(&empty, newRollingAverages(), "qdy30a_b_value", now)
+	renderMetrics(&empty, newRollingAverages(), "qdy30a_b_value", now, true)
 	if !strings.Contains(empty.String(), "qdy30a_b_value_last NaN") {
 		t.Fatalf("empty metrics = %q", empty.String())
 	}
@@ -73,6 +73,26 @@ func TestMetricsHandler(t *testing.T) {
 	}
 	if !strings.Contains(empty.String(), `qdy30a_b_value_average{window_seconds="5"} NaN`) {
 		t.Fatalf("empty metrics = %q", empty.String())
+	}
+}
+
+func TestMetricsHandlerLogsClient(t *testing.T) {
+	now := time.Date(2026, 7, 15, 16, 36, 12, 123456789, time.UTC)
+	request := httptest.NewRequest(http.MethodGet, "/metrics", nil)
+	request.RemoteAddr = "[2001:db8::1]:4321"
+	request.Header.Set("User-Agent", "Prometheus/3.0")
+	response := httptest.NewRecorder()
+	var log bytes.Buffer
+	metricsHandler{
+		averages:   newRollingAverages(),
+		name:       "sensor",
+		retainLast: true,
+		log:        &log,
+		now:        func() time.Time { return now },
+	}.ServeHTTP(response, request)
+
+	if got, want := log.String(), formatTimestamp(now)+" served metrics to client=2001:db8::1 user_agent=\"Prometheus/3.0\"\n"; got != want {
+		t.Fatalf("metrics log = %q, want %q", got, want)
 	}
 }
 
@@ -127,15 +147,28 @@ func TestUnavailableReadingKeepsLastGoodMetrics(t *testing.T) {
 	}
 
 	var rendered bytes.Buffer
-	renderMetrics(&rendered, averages, "sensor", now.Add(10*time.Minute))
+	renderMetrics(&rendered, averages, "sensor", now.Add(10*time.Minute), true)
 	for _, want := range []string{
 		"sensor_last 12.5",
-		"sensor_latency_seconds 0.025",
+		"sensor_latency_seconds NaN",
 		`sensor_average{window_seconds="5"} 12.5`,
 		`sensor_average{window_seconds="300"} 12.5`,
 	} {
 		if !strings.Contains(rendered.String(), want) {
 			t.Errorf("stale metrics do not contain %q:\n%s", want, rendered.String())
+		}
+	}
+
+	var unavailable bytes.Buffer
+	renderMetrics(&unavailable, averages, "sensor", now.Add(10*time.Minute), false)
+	for _, want := range []string{
+		"sensor_last NaN",
+		"sensor_latency_seconds NaN",
+		`sensor_average{window_seconds="5"} NaN`,
+		`sensor_average{window_seconds="300"} NaN`,
+	} {
+		if !strings.Contains(unavailable.String(), want) {
+			t.Errorf("unavailable metrics do not contain %q:\n%s", want, unavailable.String())
 		}
 	}
 }

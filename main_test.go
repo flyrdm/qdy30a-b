@@ -40,6 +40,24 @@ func TestParseOptions(t *testing.T) {
 	}
 }
 
+func TestMetricsRetainLastOption(t *testing.T) {
+	opts, err := parseOptions(nil, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !opts.metricsRetainLast {
+		t.Fatal("-metrics-retain-last should default to true")
+	}
+
+	opts, err = parseOptions([]string{"-metrics-retain-last=false"}, &bytes.Buffer{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if opts.metricsRetainLast {
+		t.Fatal("-metrics-retain-last=false was not applied")
+	}
+}
+
 func TestPrintMeasurement(t *testing.T) {
 	reading := measurement{
 		Timestamp: time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC),

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
@@ -119,9 +120,18 @@ func (a *rollingAverages) metricsTime(now time.Time) time.Time {
 	return now
 }
 
+func (a *rollingAverages) isUnavailable() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.unavailable
+}
+
 type metricsHandler struct {
-	averages *rollingAverages
-	name     string
+	averages   *rollingAverages
+	name       string
+	retainLast bool
+	log        io.Writer
+	now        func() time.Time
 }
 
 func (h metricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -129,22 +139,39 @@ func (h metricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	now := time.Now()
+	if h.now != nil {
+		now = h.now()
+	}
+	if h.log != nil {
+		fmt.Fprintf(h.log, "%s served metrics to client=%s user_agent=%q\n", formatTimestamp(now), clientIP(r.RemoteAddr), r.UserAgent())
+	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-	renderMetrics(w, h.averages, h.name, time.Now())
+	renderMetrics(w, h.averages, h.name, now, h.retainLast)
 }
 
-func renderMetrics(w io.Writer, averages *rollingAverages, name string, now time.Time) {
+func clientIP(remoteAddress string) string {
+	host, _, err := net.SplitHostPort(remoteAddress)
+	if err == nil {
+		return host
+	}
+	return remoteAddress
+}
+
+func renderMetrics(w io.Writer, averages *rollingAverages, name string, now time.Time, retainLast bool) {
 	metricsTime := averages.metricsTime(now)
+	unavailable := averages.isUnavailable()
+	reportUnavailable := unavailable && !retainLast
 	fmt.Fprintf(w, "# HELP %s_last Most recent successful sensor level in centimeters, or NaN before the first successful reading.\n", name)
 	fmt.Fprintf(w, "# TYPE %s_last gauge\n", name)
-	if value, ok := averages.last(); ok {
+	if value, ok := averages.last(); ok && !reportUnavailable {
 		fmt.Fprintf(w, "%s_last %g\n", name, value)
 	} else {
 		fmt.Fprintf(w, "%s_last NaN\n", name)
 	}
-	fmt.Fprintf(w, "# HELP %s_latency_seconds Time from sending the latest successful Modbus command until its complete response arrived.\n", name)
+	fmt.Fprintf(w, "# HELP %s_latency_seconds Time from sending the latest Modbus command until its complete response arrived, or NaN when the latest reading failed.\n", name)
 	fmt.Fprintf(w, "# TYPE %s_latency_seconds gauge\n", name)
-	if latency, ok := averages.latency(); ok {
+	if latency, ok := averages.latency(); ok && !unavailable {
 		fmt.Fprintf(w, "%s_latency_seconds %g\n", name, latency.Seconds())
 	} else {
 		fmt.Fprintf(w, "%s_latency_seconds NaN\n", name)
@@ -152,6 +179,10 @@ func renderMetrics(w io.Writer, averages *rollingAverages, name string, now time
 	fmt.Fprintf(w, "# HELP %s_average Average successful sensor level in centimeters within the rolling time window.\n", name)
 	fmt.Fprintf(w, "# TYPE %s_average gauge\n", name)
 	for _, window := range averageWindows {
+		if reportUnavailable {
+			fmt.Fprintf(w, "%s_average{window_seconds=\"%d\"} NaN\n", name, int(window.Seconds()))
+			continue
+		}
 		value, ok := averages.average(metricsTime, window)
 		if !ok {
 			fmt.Fprintf(w, "%s_average{window_seconds=\"%d\"} NaN\n", name, int(window.Seconds()))
