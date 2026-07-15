@@ -49,7 +49,7 @@ func TestMetricsHandler(t *testing.T) {
 		t.Fatalf("status = %d", response.Code)
 	}
 	for _, want := range []string{
-		"Most recent emitted sensor level in centimeters",
+		"Most recent successful sensor level in centimeters",
 		"# TYPE rain_water_tank_level_last gauge",
 		"rain_water_tank_level_last 12.5",
 		"# TYPE rain_water_tank_level_latency_seconds gauge",
@@ -99,18 +99,43 @@ func TestNormalizeMetricName(t *testing.T) {
 	}
 }
 
-func TestLastValueIncludesTimeoutSentinelWithoutAffectingAverage(t *testing.T) {
+func TestUnavailableReadingKeepsLastGoodMetrics(t *testing.T) {
 	now := time.Now()
 	averages := newRollingAverages()
-	averages.add(now, 12.5, 25*time.Millisecond)
-	averages.setLast(math.NaN())
+	averages.observe(measurement{
+		Timestamp:    now,
+		Value:        12.5,
+		Latency:      25 * time.Millisecond,
+		LatencyValid: true,
+	})
+	averages.observe(measurement{
+		Timestamp: now.Add(time.Second),
+		Value:     math.NaN(),
+	})
 
 	last, ok := averages.last()
-	if !ok || !math.IsNaN(last) {
-		t.Fatalf("last = %g, %v; want NaN, true", last, ok)
+	if !ok || last != 12.5 {
+		t.Fatalf("last = %g, %v; want 12.5, true", last, ok)
+	}
+	latency, ok := averages.latency()
+	if !ok || latency != 25*time.Millisecond {
+		t.Fatalf("latency = %s, %v; want 25ms, true", latency, ok)
 	}
 	average, ok := averages.average(now, 5*time.Second)
 	if !ok || average != 12.5 {
 		t.Fatalf("average = %g, %v; want 12.5, true", average, ok)
+	}
+
+	var rendered bytes.Buffer
+	renderMetrics(&rendered, averages, "sensor", now.Add(10*time.Minute))
+	for _, want := range []string{
+		"sensor_last 12.5",
+		"sensor_latency_seconds 0.025",
+		`sensor_average{window_seconds="5"} 12.5`,
+		`sensor_average{window_seconds="300"} 12.5`,
+	} {
+		if !strings.Contains(rendered.String(), want) {
+			t.Errorf("stale metrics do not contain %q:\n%s", want, rendered.String())
+		}
 	}
 }

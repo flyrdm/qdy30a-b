@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -30,10 +31,26 @@ type rollingAverages struct {
 	hasLast     bool
 	lastLatency time.Duration
 	hasLatency  bool
+	unavailable bool
+	lastSuccess time.Time
 }
 
 func newRollingAverages() *rollingAverages {
 	return &rollingAverages{}
+}
+
+func (a *rollingAverages) observe(reading measurement) {
+	if math.IsNaN(reading.Value) || !reading.LatencyValid {
+		a.markUnavailable()
+		return
+	}
+	a.add(reading.Timestamp, reading.Value, reading.Latency)
+}
+
+func (a *rollingAverages) markUnavailable() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.unavailable = true
 }
 
 func (a *rollingAverages) add(timestamp time.Time, value float64, latency time.Duration) {
@@ -44,6 +61,8 @@ func (a *rollingAverages) add(timestamp time.Time, value float64, latency time.D
 	a.hasLast = true
 	a.lastLatency = latency
 	a.hasLatency = true
+	a.unavailable = false
+	a.lastSuccess = timestamp
 	a.samples = append(a.samples, valueSample{timestamp: timestamp, value: value})
 	cutoff := timestamp.Add(-averageWindows[len(averageWindows)-1])
 	first := 0
@@ -59,13 +78,6 @@ func (a *rollingAverages) latency() (time.Duration, bool) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return a.lastLatency, a.hasLatency
-}
-
-func (a *rollingAverages) setLast(value float64) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-	a.lastValue = value
-	a.hasLast = true
 }
 
 func (a *rollingAverages) last() (float64, bool) {
@@ -98,6 +110,15 @@ func (a *rollingAverages) average(now time.Time, window time.Duration) (float64,
 	return sum / float64(count), true
 }
 
+func (a *rollingAverages) metricsTime(now time.Time) time.Time {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if a.unavailable && a.hasLast {
+		return a.lastSuccess
+	}
+	return now
+}
+
 type metricsHandler struct {
 	averages *rollingAverages
 	name     string
@@ -113,7 +134,8 @@ func (h metricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func renderMetrics(w io.Writer, averages *rollingAverages, name string, now time.Time) {
-	fmt.Fprintf(w, "# HELP %s_last Most recent emitted sensor level in centimeters, or NaN when no reading is available.\n", name)
+	metricsTime := averages.metricsTime(now)
+	fmt.Fprintf(w, "# HELP %s_last Most recent successful sensor level in centimeters, or NaN before the first successful reading.\n", name)
 	fmt.Fprintf(w, "# TYPE %s_last gauge\n", name)
 	if value, ok := averages.last(); ok {
 		fmt.Fprintf(w, "%s_last %g\n", name, value)
@@ -130,7 +152,7 @@ func renderMetrics(w io.Writer, averages *rollingAverages, name string, now time
 	fmt.Fprintf(w, "# HELP %s_average Average successful sensor level in centimeters within the rolling time window.\n", name)
 	fmt.Fprintf(w, "# TYPE %s_average gauge\n", name)
 	for _, window := range averageWindows {
-		value, ok := averages.average(now, window)
+		value, ok := averages.average(metricsTime, window)
 		if !ok {
 			fmt.Fprintf(w, "%s_average{window_seconds=\"%d\"} NaN\n", name, int(window.Seconds()))
 			continue

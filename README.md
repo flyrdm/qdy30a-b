@@ -94,9 +94,10 @@ gauge has a `window_seconds` label with values
 `5`, `10`, `20`, `30`, `60`, and `300`. Each value is the arithmetic mean of
 successful readings in that rolling window. Values are levels in centimeters.
 Timed-out `NaN` readings
-are excluded. The `_last` gauge reports the most recently emitted
-value, including `NaN` after a timeout. Metrics without a reading are reported as
-`NaN`. The default metric name prefix is `qdy30a_b_value`. The HTTP server is
+are excluded. When the sensor is unreachable, the `_last`, latency, and rolling
+average gauges retain their last successful values. Metrics without any
+successful reading are reported as `NaN`. The default metric name prefix is
+`qdy30a_b_value`. The HTTP server is
 disabled unless `-metrics-address` is set.
 
 The `<name>_latency_seconds` gauge reports the most recent successful Modbus

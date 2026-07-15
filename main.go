@@ -125,12 +125,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 		if err != nil {
 			if errors.Is(err, errResponseTimeout) {
 				reading = unavailableMeasurement(s.config, lastReading)
-				averages.setLast(reading.Value)
+				averages.observe(reading)
 				if err := printMeasurement(stdout, reading, opts.json, opts.text); err != nil {
 					return err
 				}
 				fmt.Fprintf(stderr, "read sensor: %v; output NaN and reconnecting\n", err)
 			} else {
+				averages.markUnavailable()
 				fmt.Fprintf(stderr, "read sensor: %v; reconnecting\n", err)
 			}
 			_ = s.port.Close()
@@ -147,7 +148,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			continue
 		}
 		lastReading = reading
-		averages.add(reading.Timestamp, reading.Value, reading.Latency)
+		averages.observe(reading)
 		if err := printMeasurement(stdout, reading, opts.json, opts.text); err != nil {
 			return err
 		}
