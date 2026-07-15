@@ -173,7 +173,8 @@ func TestRunOutputsMinusOneAndReconnectsAfterTimeout(t *testing.T) {
 		t.Fatalf("output lines = %#v, want timeout sentinel then recovered reading", lines)
 	}
 	recoveredFields := strings.Fields(lines[1])
-	if len(recoveredFields) != 4 || recoveredFields[2] != "level_cm=12.4" || recoveredFields[3] == "read_latency_seconds=NaN" {
+	if len(recoveredFields) != 4 || recoveredFields[2] != "level_cm=12.4" ||
+		!strings.HasPrefix(recoveredFields[3], "read_latency_seconds=") || recoveredFields[3] == "read_latency_seconds=NaN" {
 		t.Fatalf("recovered output = %q, want value and response latency", lines[1])
 	}
 	if !strings.Contains(stderr.String(), "output NaN and reconnecting") || !strings.Contains(stderr.String(), "reconnected") {

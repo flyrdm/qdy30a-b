@@ -241,7 +241,7 @@ func parseOptions(args []string, stderr io.Writer) (options, error) {
 	fs.DurationVar(&opts.interval, "interval", 0, "polling interval; zero reads once")
 	fs.DurationVar(&opts.timeout, "timeout", 250*time.Millisecond, "response timeout per request")
 	fs.BoolVar(&opts.json, "json", false, "emit JSON readings")
-	fs.BoolVar(&opts.text, "text", false, "emit only timestamp and numeric value")
+	fs.BoolVar(&opts.text, "text", false, "emit tab-separated timestamp, level_cm, and read_latency_seconds fields")
 	fs.BoolVar(&opts.debug, "debug", false, "log raw serial TX/RX bytes to stderr")
 	fs.StringVar(&opts.metricsAddress, "metrics-address", "", "HTTP address for /metrics (disabled when empty)")
 	fs.StringVar(&opts.metricsName, "metrics-name", "qdy30a_b_value", "Prometheus metric name prefix")
