@@ -7,6 +7,8 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -39,7 +41,7 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			return
 		}
-		fmt.Fprintln(os.Stderr, "error:", err)
+		_ = writeTimestamped(os.Stderr, time.Now(), "error: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -76,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return fmt.Errorf("sensor did not respond with the configured parameters (%d 8%s1, address %d): %w", config.baud, parityName(config.parity), config.address, err)
 		}
 	} else if opts.discover {
-		fmt.Fprintf(stderr, "scanning %s with read-only Modbus requests; a complete scan may take several minutes...\n", opts.device)
+		_ = writeTimestamped(stderr, time.Now(), "scanning %s with read-only Modbus requests; a complete scan may take several minutes...\n", opts.device)
 		config, err := s.discover()
 		if err != nil {
 			return err
@@ -86,7 +88,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		factory := configuration{baud: 9600, address: 1, parity: serial.NoParity}
 		config := factory
 		if err := s.probe(factory); err != nil {
-			fmt.Fprintf(stderr, "factory parameters did not respond; starting read-only discovery...\n")
+			_ = writeTimestamped(stderr, time.Now(), "factory parameters did not respond; starting read-only discovery...\n")
 			discovered, discoveryErr := s.discover()
 			if discoveryErr != nil {
 				return fmt.Errorf("factory probe failed (%v); discovery failed: %w", err, discoveryErr)
@@ -116,14 +118,15 @@ func run(args []string, stdout, stderr io.Writer) error {
 				log:        stderr,
 			},
 			ReadHeaderTimeout: 5 * time.Second,
+			ErrorLog:          log.New(timestampWriter{output: stderr}, "", 0),
 		}
 		defer server.Close()
 		go func() {
 			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				fmt.Fprintf(stderr, "metrics server: %v\n", err)
+				_ = writeTimestamped(stderr, time.Now(), "metrics server: %v\n", err)
 			}
 		}()
-		fmt.Fprintf(stderr, "serving %s metrics at http://%s/metrics\n", metricName, listener.Addr())
+		_ = writeTimestamped(stderr, time.Now(), "serving %s metrics at http://%s/metrics\n", metricName, listener.Addr())
 	}
 	var lastReading measurement
 	for {
@@ -135,10 +138,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 				if err := printMeasurement(stdout, reading, opts.json, opts.text); err != nil {
 					return err
 				}
-				fmt.Fprintf(stderr, "read sensor: %v; output NaN and reconnecting\n", err)
+				_ = writeTimestamped(stderr, time.Now(), "read sensor: %v; output NaN and reconnecting\n", err)
 			} else {
 				averages.markUnavailable()
-				fmt.Fprintf(stderr, "read sensor: %v; reconnecting\n", err)
+				_ = writeTimestamped(stderr, time.Now(), "read sensor: %v; reconnecting\n", err)
 			}
 			_ = s.port.Close()
 			if !waitForNextRead(ctx, opts.interval) {
@@ -169,8 +172,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 func printDetectedConfiguration(output io.Writer, device string, config configuration) {
 	parity := parityName(config.parity)
-	fmt.Fprintf(output, "detected QDY30A-B: device=%s baud=%d format=8%s1 address=%d\n", device, config.baud, parity, config.address)
-	fmt.Fprintf(output, "launch with: ./qdy30a-b -device %s -baud %d -address %d -parity %s\n", device, config.baud, config.address, parity)
+	now := time.Now()
+	_ = writeTimestamped(output, now, "detected QDY30A-B: device=%s baud=%d format=8%s1 address=%d\n", device, config.baud, parity, config.address)
+	_ = writeTimestamped(output, now, "launch with: ./qdy30a-b -device %s -baud %d -address %d -parity %s\n", device, config.baud, config.address, parity)
 }
 
 var openSerialPort = func(device string, baud int, parity serial.Parity) (configurableSerialPort, error) {
@@ -196,7 +200,7 @@ func reconnectSensor(ctx context.Context, opts options, config configuration, st
 			}
 			s := newSensor(sensorPort, opts.timeout)
 			if err = s.setConfiguration(config); err == nil {
-				fmt.Fprintf(stderr, "reconnected to %s\n", opts.device)
+				_ = writeTimestamped(stderr, time.Now(), "reconnected to %s\n", opts.device)
 				return s, nil
 			}
 			_ = port.Close()
@@ -204,7 +208,7 @@ func reconnectSensor(ctx context.Context, opts options, config configuration, st
 		} else {
 			err = serialOpenError(opts.device, err)
 		}
-		fmt.Fprintf(stderr, "reconnect failed: %v; retrying in %s\n", err, retryDelay)
+		_ = writeTimestamped(stderr, time.Now(), "reconnect failed: %v; retrying in %s\n", err, retryDelay)
 		if !waitForNextRead(ctx, retryDelay) {
 			return nil, nil
 		}
@@ -316,14 +320,18 @@ func printMeasurement(w io.Writer, reading measurement, asJSON, asText bool) err
 	}
 	if asText {
 		if !reading.LatencyValid {
-			_, err := fmt.Fprintf(w, "%s %g NaN\n", formatTimestamp(reading.Timestamp), reading.Value)
+			_, err := fmt.Fprintf(w, "%s\tlevel_cm=%g\tread_latency_seconds=NaN\n", formatTimestamp(reading.Timestamp), reading.Value)
 			return err
 		}
-		_, err := fmt.Fprintf(w, "%s %g %g\n", formatTimestamp(reading.Timestamp), reading.Value, reading.Latency.Seconds())
+		_, err := fmt.Fprintf(w, "%s\tlevel_cm=%g\tread_latency_seconds=%g\n", formatTimestamp(reading.Timestamp), reading.Value, reading.Latency.Seconds())
 		return err
 	}
-	_, err := fmt.Fprintf(w, "%s value=%g %s raw=%d decimals=%d baud=%d address=%d zero=%d full_scale=%d\n",
-		formatTimestamp(reading.Timestamp), reading.Value, reading.Unit, reading.Raw,
+	latencySeconds := math.NaN()
+	if reading.LatencyValid {
+		latencySeconds = reading.Latency.Seconds()
+	}
+	_, err := fmt.Fprintf(w, "%s value=%g %s latency_seconds=%g raw=%d decimals=%d baud=%d address=%d zero=%d full_scale=%d\n",
+		formatTimestamp(reading.Timestamp), reading.Value, reading.Unit, latencySeconds, reading.Raw,
 		reading.Decimals, reading.Baud, reading.Address, reading.Zero, reading.FullScale)
 	return err
 }

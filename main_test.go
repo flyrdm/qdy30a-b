@@ -69,7 +69,7 @@ func TestPrintMeasurement(t *testing.T) {
 	if err := printMeasurement(&human, reading, false, false); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(human.String(), "value=12.3 cm raw=123") {
+	if !strings.Contains(human.String(), "value=12.3 cm latency_seconds=0.025 raw=123") {
 		t.Fatalf("human output = %q", human.String())
 	}
 
@@ -96,7 +96,7 @@ func TestPrintMeasurement(t *testing.T) {
 	if err := printMeasurement(&text, reading, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := text.String(), formatTimestamp(reading.Timestamp)+" 12.3 0.025\n"; got != want {
+	if got, want := text.String(), formatTimestamp(reading.Timestamp)+"\tlevel_cm=12.3\tread_latency_seconds=0.025\n"; got != want {
 		t.Fatalf("text output = %q, want %q", got, want)
 	}
 }
@@ -118,8 +118,15 @@ func TestUnavailableMeasurementOutputsMinusOne(t *testing.T) {
 	if err := printMeasurement(&text, reading, false, true); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(text.String(), " NaN NaN\n") {
+	if !strings.HasSuffix(text.String(), "\tlevel_cm=NaN\tread_latency_seconds=NaN\n") {
 		t.Fatalf("text output = %q, want NaN value and latency", text.String())
+	}
+	var human bytes.Buffer
+	if err := printMeasurement(&human, reading, false, false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(human.String(), "value=NaN cm latency_seconds=NaN raw=-1") {
+		t.Fatalf("human output = %q, want labeled NaN value and latency", human.String())
 	}
 	encoded, err := json.Marshal(reading)
 	if err != nil {
@@ -162,11 +169,11 @@ func TestRunOutputsMinusOneAndReconnectsAfterTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
-	if len(lines) != 2 || !strings.HasSuffix(lines[0], " NaN NaN") {
+	if len(lines) != 2 || !strings.HasSuffix(lines[0], "\tlevel_cm=NaN\tread_latency_seconds=NaN") {
 		t.Fatalf("output lines = %#v, want timeout sentinel then recovered reading", lines)
 	}
 	recoveredFields := strings.Fields(lines[1])
-	if len(recoveredFields) != 4 || recoveredFields[2] != "12.4" || recoveredFields[3] == "NaN" {
+	if len(recoveredFields) != 4 || recoveredFields[2] != "level_cm=12.4" || recoveredFields[3] == "read_latency_seconds=NaN" {
 		t.Fatalf("recovered output = %q, want value and response latency", lines[1])
 	}
 	if !strings.Contains(stderr.String(), "output NaN and reconnecting") || !strings.Contains(stderr.String(), "reconnected") {
@@ -198,6 +205,17 @@ func TestFormatTimestampUsesLocalTimeAndMicrosecondPrecision(t *testing.T) {
 	wholeSecond := time.Date(2026, 7, 10, 11, 41, 34, 0, time.UTC)
 	if got, want := formatTimestamp(wholeSecond), "2026-07-10 13:41:34.000000"; got != want {
 		t.Fatalf("whole-second timestamp = %q, want %q", got, want)
+	}
+}
+
+func TestWriteTimestamped(t *testing.T) {
+	timestamp := time.Date(2026, 7, 15, 16, 36, 12, 123456789, time.UTC)
+	var output bytes.Buffer
+	if err := writeTimestamped(&output, timestamp, "read sensor: %s\n", "timed out"); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := output.String(), formatTimestamp(timestamp)+" read sensor: timed out\n"; got != want {
+		t.Fatalf("timestamped output = %q, want %q", got, want)
 	}
 }
 

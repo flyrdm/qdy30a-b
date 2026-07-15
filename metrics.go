@@ -144,7 +144,7 @@ func (h metricsHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		now = h.now()
 	}
 	if h.log != nil {
-		fmt.Fprintf(h.log, "%s served metrics to client=%s user_agent=%q\n", formatTimestamp(now), clientIP(r.RemoteAddr), r.UserAgent())
+		_ = writeTimestamped(h.log, now, "served metrics to client=%s user_agent=%q\n", clientIP(r.RemoteAddr), r.UserAgent())
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 	renderMetrics(w, h.averages, h.name, now, h.retainLast)

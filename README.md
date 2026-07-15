@@ -40,12 +40,24 @@ Force discovery, emit JSON, or poll continuously:
 ./qdy30a-b -interval 1s
 ```
 
-Text mode prints the local timestamp, scaled numeric value, and response latency
-in seconds, separated by spaces. It omits the timezone and always prints exactly
-six fractional digits for microsecond timestamp precision and aligned output:
+The default human-readable level report labels every numeric field:
 
 ```text
-2026-07-10 13:00:00.123456 12.3 0.025
+2026-07-10 13:00:00.123456 value=12.3 cm latency_seconds=0.025 raw=123 decimals=1 baud=9600 address=1 zero=0 full_scale=500
+```
+
+Here, `value` is the scaled level in the displayed unit, `latency_seconds` is
+the Modbus response time, `raw` is the signed measurement register,
+`decimals` is the sensor's decimal-place setting, `baud` and `address` identify
+the active Modbus connection, and `zero` and `full_scale` are the calibration
+registers.
+
+Text mode prints three tab-separated, explicitly named fields: the local
+timestamp, level in centimeters, and sensor-read latency in seconds. The
+timestamp omits the timezone and always prints exactly six fractional digits:
+
+```text
+2026-07-10 13:00:00.123456	level_cm=12.3	read_latency_seconds=0.025
 ```
 
 JSON output includes the same duration as `latency_seconds`. On a timeout, text
@@ -103,6 +115,9 @@ for all sensor-derived gauges while the sensor is unreachable, use
 default. The HTTP server is disabled unless
 `-metrics-address` is set. Each successful scrape logs the client's direct IP
 address and HTTP user agent to stderr with a timestamp.
+
+All stderr logs—including startup, discovery, reconnection, sensor read errors,
+metrics scrapes, and wire debugging—use the same timestamp format.
 
 The `<name>_latency_seconds` gauge reports the latest Modbus response latency in
 seconds. It is measured from immediately before the read command is written
