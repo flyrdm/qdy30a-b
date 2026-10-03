@@ -23,13 +23,30 @@ var baudCodes = map[uint16]int{
 }
 
 var unitNames = map[uint16]string{
-	0: "unitless",
-	1: "cm",
-	2: "mm",
-	3: "MPa",
-	4: "Pa",
-	5: "kPa",
-	6: "mA",
+	0: "MPa",
+	1: "KPa",
+	2: "Pa",
+	3: "bar",
+	4: "mbar",
+	5: "Kgcm2",
+	6: "PSI",
+	7: "mH2O",
+	8: "mmH2O",
+	9: "inH2O",
+	10: "H2O",
+	11: "mHg",
+	12: "mmHg",
+	13: "inHg",
+	14: "atm",
+	15: "Torr",
+	16: "m",
+	17: "cm",
+	18: "mm",
+	19: "Kg",
+	20: "degC",
+	21: "PH",
+	22: "degF",
+	23: "None",
 }
 
 type configuration struct {
